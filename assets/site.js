@@ -79,22 +79,42 @@
     addEventListener('scroll', request, { passive: true });
     addEventListener('resize', request);
     reduced.addEventListener('change', () => { layers.forEach(clearFx); shown = -1; request(); });
-    stories.push({ start, distance, stops });
+    stories.push({ start, distance, stops, moves });
     draw();
   }
   const stories = [];
   document.querySelectorAll('[data-process]').forEach(process);
 
-  // ---- Arrow keys: while a process is on screen, one press moves one whole step ----
+  // ---- Arrow keys: while a process is on screen, one press plays one whole step ----
   // Outside a process the keys scroll the page as usual.
-  let aim = null, aimAt = 0;
+  // The page is moved here, frame by frame, instead of with the browser's own smooth scroll: that one
+  // covers a step in about a third of a second (or jumps, if smooth scrolling is off), too fast to see the change.
+  let aim = null, run = 0;
+  const stop = () => { run++; aim = null; };
+  // parts: [from, to, milliseconds, easing]; played one after the other
+  function glide(parts) {
+    const id = ++run;
+    let i = 0, began = performance.now();
+    const frame = now => {
+      if (id !== run) return;
+      const [from, to, ms, curve] = parts[i], t = Math.min(1, (now - began) / ms);
+      scrollTo(0, from + (to - from) * (curve ? curve(t) : t));
+      if (t >= 1) { i++; began = now; if (i >= parts.length) { aim = null; return; } }
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+  // The visitor taking over (wheel, finger, scrollbar) ends a running move at once.
+  ['wheel', 'touchstart', 'pointerdown'].forEach(type => addEventListener(type, stop, { passive: true }));
+
   addEventListener('keydown', e => {
     const dir = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
-    if (!dir || reduced.matches || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (!dir) { if (aim !== null && ['PageDown', 'PageUp', 'Home', 'End', ' '].includes(e.key)) stop(); return; }
+    if (reduced.matches || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
     if (document.body.classList.contains('open')) return;
     if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable], [role="tab"]')) return;
     // While a move is still running, count from where it is going, so quick presses each add a step.
-    const now = performance.now(), y = aim !== null && now - aimAt < 900 ? aim : scrollY;
+    const y = aim !== null ? aim : scrollY;
     for (const s of stories) {
       const d = s.distance();
       if (d <= 0) continue;
@@ -110,10 +130,15 @@
       }
       if (to == null) continue;
       e.preventDefault();
-      if (e.repeat && now - aimAt < 650) return; // a held key steps at a readable pace
-      aim = to; aimAt = now;
-      scrollTo({ top: to, behavior: 'smooth' });
-      return;
+      if (e.repeat && aim !== null) return; // a held key waits for the step to finish
+      aim = to;
+      // Spend the time on the stretch of scroll where the picture is actually changing, and hurry through the pauses.
+      const from = scrollY, lo = Math.min(from, to), hi = Math.max(from, to);
+      const spans = s.moves.map(([m, n]) => [a + m * d, a + n * d]).filter(([m, n]) => n > lo + 1 && m < hi - 1);
+      if (!spans.length) return glide([[from, to, 650, ease]]);
+      const first = Math.max(lo, spans[0][0]), end = Math.min(hi, spans[spans.length - 1][1]);
+      const A = dir > 0 ? first : end, B = dir > 0 ? end : first;
+      return glide([[from, A, 110], [A, B, 1000 * spans.length], [B, to, 160]].filter(([p, q]) => Math.abs(q - p) > 1));
     }
   });
 
