@@ -79,9 +79,43 @@
     addEventListener('scroll', request, { passive: true });
     addEventListener('resize', request);
     reduced.addEventListener('change', () => { layers.forEach(clearFx); shown = -1; request(); });
+    stories.push({ start, distance, stops });
     draw();
   }
+  const stories = [];
   document.querySelectorAll('[data-process]').forEach(process);
+
+  // ---- Arrow keys: while a process is on screen, one press moves one whole step ----
+  // Outside a process the keys scroll the page as usual.
+  let aim = null, aimAt = 0;
+  addEventListener('keydown', e => {
+    const dir = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+    if (!dir || reduced.matches || e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (document.body.classList.contains('open')) return;
+    if (e.target.closest && e.target.closest('input, textarea, select, [contenteditable], [role="tab"]')) return;
+    // While a move is still running, count from where it is going, so quick presses each add a step.
+    const now = performance.now(), y = aim !== null && now - aimAt < 900 ? aim : scrollY;
+    for (const s of stories) {
+      const d = s.distance();
+      if (d <= 0) continue;
+      const a = s.start(), points = s.stops.map(p => Math.round(a + p * d + 1)), last = points[points.length - 1];
+      const exit = Math.round(a + d + innerHeight - (top ? top.offsetHeight : 0));
+      let to = null;
+      if (dir > 0) {
+        if (y < a - 2 && a - y < innerHeight * 0.75) to = points[0];           // nearly there: pin it on step one
+        else if (y >= a - 2 && y < last - 2) to = points.find(p => p > y + 2); // next step
+        else if (y >= last - 2 && y < exit - 2) to = exit;                     // after the last step: on to the next section
+      } else if (y > points[0] + 2 && y <= exit + 2) {
+        to = [...points].reverse().find(p => p < y - 2);                       // previous step
+      }
+      if (to == null) continue;
+      e.preventDefault();
+      if (e.repeat && now - aimAt < 650) return; // a held key steps at a readable pace
+      aim = to; aimAt = now;
+      scrollTo({ top: to, behavior: 'smooth' });
+      return;
+    }
+  });
 
   // ---- Drag to compare ----
   document.querySelectorAll('.compare').forEach(box => {
